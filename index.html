@@ -175,6 +175,7 @@ const CFG = {
   NIGHT_FAR: 60          // karanlıkta görüş mesafesi (m)
 };
 const PREFIX = 'omniebe3d-';
+const BUILD = 'v4-maps';   // herkes aynı dosyayı kullanmalı; sürüm uyuşmazsa oda katılımı reddedilir
 // rays: [zeminden yükseklik, yarıçap]. En alt ışın, basamak yüksekliğinden (step) yukarıda olmalı.
 const STEVE_BODY = { rays: [[0.55,0.35],[1.0,0.35],[1.6,0.35]], step: 0.5, head: 1.5, jump: 7.4 };
 const OMNI_BODY  = { rays: [[1.6,0.6],[2.3,1.0],[3.0,1.1]],  step: 1.4, head: 2.3, jump: 7.4 };
@@ -554,6 +555,7 @@ function hostRecv(conn,m){
   if(!m || typeof m!=='object') return;
   if(m.t==='hello'){
     const reject = why=>{ try{conn.send({t:'rej',why})}catch{} setTimeout(()=>{try{conn.close()}catch{}},400); };
+    if(m.bd!==BUILD) return reject('Oyun sürümü uyuşmuyor. İkiniz de en son omnidroid_ebe.html dosyasını açın.');
     if(G.phase!=='lobby') return reject('Oyun çoktan başladı. Bir sonraki oyunu bekle.');
     const id = freeSlot();
     if(!id) return reject('Oda dolu (5/5).');
@@ -585,7 +587,7 @@ function removePlayer(id){
 }
 function sendAll(msg){ for(const c of conns.values()){ try{ c.send(msg); }catch{} } }
 function snapshot(){
-  return { t:'st', ph:G.phase, it:G.it, tm:r2(G.time), rd:G.round, tn:G.turn, tt:G.total, rs:G.result, mp:curMap,
+  return { t:'st', ph:G.phase, it:G.it, tm:r2(G.time), rd:G.round, tn:G.turn, tt:G.total, rs:G.result, mp:(maps[curMap]?maps[curMap].name:''), bd:BUILD,
     pl:Object.values(G.players).map(p=>({i:p.id,n:p.name,x:r2(p.x),y:r2(p.y),z:r2(p.z),r:r2(p.ry),pt:r2(p.pt||0),f:p.f?1:0,al:p.alive?1:0,sc:p.score,sp:p.sp})) };
 }
 function broadcast(){ sendAll(snapshot()); }
@@ -605,7 +607,7 @@ async function startClient(name, code){
   hostConn.on('data', clientRecv);
   hostConn.on('close', ()=>leave('Host ile bağlantı koptu.'));
   hostConn.on('error', ()=>leave('Host ile bağlantı koptu.'));
-  hostConn.send({t:'hello', name});
+  hostConn.send({t:'hello', name, bd:BUILD});
 }
 function clientRecv(m){
   if(!m) return;
@@ -616,7 +618,9 @@ function clientRecv(m){
 }
 function applyState(s){
   const prevRound = G.round;
-  if(typeof s.mp==='number' && s.mp!==curMap) setMap(s.mp);
+  if(s.bd!==BUILD){ leave('Host farklı bir oyun sürümü kullanıyor. İkiniz de en son omnidroid_ebe.html dosyasını açın.', true); return; }
+  const mi = maps.findIndex(m=>m.name===s.mp);
+  if(mi>=0 && mi!==curMap) setMap(mi);
   G.phase=s.ph; G.it=s.it; G.time=s.tm; G.timeAt=performance.now(); G.round=s.rd; G.turn=s.tn; G.total=s.tt; G.result=s.rs;
   const seen = new Set();
   for(const q of s.pl){
@@ -857,9 +861,9 @@ function renderHud(){
   $('clock').textContent = (G.phase==='hide'||G.phase==='play'||G.phase==='end') ? fmtTime(dispT) : '';
   const nm = G.players[G.it] ? G.players[G.it].name : '';
   let ph='';
-  if(G.phase==='hide') ph = omni ? 'Gözlerin kapalı' : 'Saklan! Omnidroid '+Math.ceil(dispT)+' sn sonra serbest';
+  if(G.phase==='hide') ph = (omni ? 'Gözlerin kapalı' : 'Saklan! Omnidroid '+Math.ceil(dispT)+' sn sonra serbest')+' · '+(maps[curMap]?maps[curMap].name:'');
   else if(G.phase==='play') ph = 'Tur '+Math.min(G.turn+1,G.total)+' / '+G.total+' · '+(MAPS[curMap]?MAPS[curMap].name:'');
-  else if(G.phase==='end') ph = 'Tur bitti';
+  else if(G.phase==='end') ph = 'Tur bitti · '+(maps[curMap]?maps[curMap].name:'');
   else if(G.phase==='final') ph = 'Oyun bitti';
   $('phase').textContent = ph;
   const role = $('role');
