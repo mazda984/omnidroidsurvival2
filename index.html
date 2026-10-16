@@ -172,10 +172,11 @@ const CFG = {
   STEVE_YAW: Math.PI,    // Steve ters bakıyorsa 0 yap (ya da oyunda Y tuşuna bas)
   FLASH_I: 380,          // fener parlaklığı
   RED_I: 170,            // Omnidroid kırmızı ışığı
-  NIGHT_FAR: 60          // karanlıkta görüş mesafesi (m)
+  NIGHT_FAR: 60,         // karanlıkta görüş mesafesi (m)
+  MAP_SIZE_MULT: 1.6     // tüm haritaların boyutu çarpanı (Omnidroid delikten geçemiyorsa artır)
 };
 const PREFIX = 'omniebe3d-';
-const BUILD = 'v4-maps';   // herkes aynı dosyayı kullanmalı; sürüm uyuşmazsa oda katılımı reddedilir
+const BUILD = 'v5-bigmaps';   // herkes aynı dosyayı kullanmalı; sürüm uyuşmazsa oda katılımı reddedilir
 // rays: [zeminden yükseklik, yarıçap]. En alt ışın, basamak yüksekliğinden (step) yukarıda olmalı.
 const STEVE_BODY = { rays: [[0.55,0.35],[1.0,0.35],[1.6,0.35]], step: 0.5, head: 1.5, jump: 7.4 };
 const OMNI_BODY  = { rays: [[1.6,0.6],[2.3,1.0],[3.0,1.1]],  step: 1.4, head: 2.3, jump: 7.4 };
@@ -241,7 +242,7 @@ function buildMap(gltf, cfg){
   root.updateMatrixWorld(true);
   let box = new THREE.Box3().setFromObject(root);
   const size = box.getSize(new V3());
-  const k = cfg.fit / Math.max(size.x, size.z);
+  const k = cfg.fit * CFG.MAP_SIZE_MULT / Math.max(size.x, size.z);
   root.scale.setScalar(k);
   root.updateMatrixWorld(true);
   box = new THREE.Box3().setFromObject(root);
@@ -292,7 +293,7 @@ function pushOut(pos, body){
 /* Aktif haritada (colMeshes/mapBox) güvenli başlangıç noktaları bul */
 function computeSpawns(){
   const w = mapBox.max.x-mapBox.min.x, dd = mapBox.max.z-mapBox.min.z;
-  const step = clamp(Math.sqrt(w*dd)/45, 2, 6), mg = Math.min(6, Math.min(w,dd)*0.08);
+  const step = clamp(Math.sqrt(w*dd)/45, 2, 8), mg = Math.min(6, Math.min(w,dd)*0.08);
   const top = mapBox.max.y + 5;
   const pts = [];
   for(let x=mapBox.min.x+mg; x<mapBox.max.x-mg; x+=step){
