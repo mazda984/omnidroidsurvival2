@@ -79,6 +79,7 @@ input:focus-visible{border-color:var(--road)}
 .sc{display:flex;justify-content:space-between;padding:7px 10px;background:var(--asphalt2);border-radius:3px}
 .sc.first{border-left:5px solid var(--road)}
 .sc b{font-family:var(--head);font-size:22px}
+#fx{position:fixed;inset:0;pointer-events:none;opacity:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 30%,rgba(30,0,0,.92) 100%)}
 #keys{position:absolute;left:18px;bottom:14px;font-size:12.5px;color:#e6eaee;line-height:1.55}
 @media (max-width:760px){#menu{background:rgba(20,24,29,.9)}.hint{display:none}}
 </style>
@@ -123,9 +124,10 @@ input:focus-visible{border-color:var(--road)}
     <button class="btn alt" id="btnLeave">Odadan ayrıl</button>
   </div>
 </div>
-<div class="hint" id="homeHint"><b>Kontroller</b><br>W A S D hareket · Shift koş · Boşluk zıpla<br>Fare bakış · Tab skor · R sıkıştım</div>
+<div class="hint" id="homeHint"><b>Kontroller</b><br>W A S D hareket · Shift koş · Boşluk zıpla<br>Fare bakış · F fener · Tab skor · R sıkıştım</div>
 
 <!-- ============ HUD ============ -->
+<div id="fx"></div>
 <div id="hud" class="hidden">
   <div id="cross"></div>
   <div id="top"><div id="clock">0:00</div><div id="phase"></div></div>
@@ -133,7 +135,7 @@ input:focus-visible{border-color:var(--road)}
   <div id="plist"></div>
   <div id="stamwrap"><div id="stam"></div></div>
   <div id="toast"></div>
-  <div id="keys">W A S D hareket · Shift koş · Boşluk zıpla · Tab skor · R sıkıştım</div>
+  <div id="keys">W A S D hareket · Shift koş · Boşluk zıpla · F fener · Tab skor · R sıkıştım</div>
 </div>
 <div id="veil" class="hidden"><b id="veilNum">10</b><div>Gözlerin kapalı. Herkes saklanıyor.</div></div>
 <div id="board" class="hidden"><div class="card" id="boardCard"></div></div>
@@ -163,10 +165,12 @@ const CFG = {
   STEVE_H: 1.8, OMNI_H: 3.4,   // metre: Omnidroid Steve'den büyüktür
   STEVE_EYE: 1.62, OMNI_EYE: 3.0,
   STEVE_WALK: 4.2, STEVE_RUN: 6.6,
-  OMNI_WALK: 5.0,  OMNI_RUN: 7.2,
+  OMNI_WALK: 5.0,  OMNI_RUN: 10.5,   // Omnidroid koşarken top olup yuvarlanır
   CATCH_R: 2.2,          // yakalama mesafesi (m)
-  // Model hangi yöne bakıyor? Ters yürüyorlarsa oyun içinde Y (Steve) / U (Omnidroid) tuşuna bas.
-  STEVE_YAW: Math.PI, OMNI_YAW: Math.PI
+  STEVE_YAW: Math.PI,    // Steve ters bakıyorsa 0 yap (ya da oyunda Y tuşuna bas)
+  FLASH_I: 380,          // fener parlaklığı
+  RED_I: 170,            // Omnidroid kırmızı ışığı
+  NIGHT_FAR: 60          // karanlıkta görüş mesafesi (m)
 };
 const PREFIX = 'omniebe3d-';
 const STEVE_BODY = { r: 0.35, heights: [0.4, 1.0, 1.6], step: 0.5, jump: 7.4 };
@@ -191,9 +195,18 @@ scene.background = new THREE.Color(0xa9d3f5);
 scene.fog = new THREE.Fog(0xa9d3f5, 90, 380);
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.05, 800);
 camera.rotation.order = 'YXZ';
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f98, 1.7));
+const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8f98, 1.7); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1d6, 1.5);
 sun.position.set(60,120,40); scene.add(sun);
+function makeSpot(){ return new THREE.SpotLight(0xfff0d0, 0, 60, 0.42, 0.55, 2); }
+scene.add(camera);
+const localFlash = makeSpot();                 // kendi fenerim (kameraya bağlı)
+localFlash.position.set(0.18,-0.12,0);
+const flashTarget = new THREE.Object3D(); flashTarget.position.set(0,0,-5);
+camera.add(flashTarget); localFlash.target = flashTarget; camera.add(localFlash);
+const omniLight = new THREE.PointLight(0xff1a12, 0, 32, 2); scene.add(omniLight);   // Omnidroid'in kırmızı ışığı
+const omniMats = [];
+let omniYawOff = Math.PI;
 addEventListener('resize', ()=>{ renderer.setSize(innerWidth,innerHeight); camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); });
 
 /* ======================= VARLIKLAR ======================= */
@@ -328,7 +341,7 @@ function makeLabel(text, color){
   g.lineWidth=7; g.strokeStyle='rgba(0,0,0,.75)'; g.strokeText(text,128,34);
   g.fillStyle=color; g.fillText(text,128,34);
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, fog:false}));
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true}));
   sp.scale.set(1.6,0.4,1);
   return sp;
 }
@@ -346,8 +359,18 @@ async function loadAll(){
   steveTpl = prepareCharacter(steve, CFG.STEVE_H, null, CFG.STEVE_H/8);
   setStatus('Omnidroid yükleniyor…');
   const omni = await loadGLB('b64-omni');
-  omniClips = { idle:findClip(omni.animations,'@idle'), walk:findClip(omni.animations,'@walk'), run:findClip(omni.animations,'@run') };
+  omniClips = { idle:findClip(omni.animations,'@idle'), walk:findClip(omni.animations,'@walk'),
+                roll:findClip(omni.animations,'@ballroll') || findClip(omni.animations,'@run') };
   omniTpl = prepareCharacter(omni, CFG.OMNI_H, omniClips.idle, 0.0195*1.7);
+  // İleri yönü iskeletten bul: Source modelleri +X'e bakar (ballroll animasyonu da +X'e ilerler)
+  try{
+    omniTpl.updateMatrixWorld(true);
+    let root=null; omniTpl.traverse(o=>{ if(o.name==='Root_50') root=o; });
+    if(root && root.parent){
+      const f = new V3(1,0,0).transformDirection(root.parent.matrixWorld); f.y=0;
+      if(f.lengthSq()>1e-4){ f.normalize(); omniYawOff = Math.PI - Math.atan2(f.x,f.z); }
+    }
+  }catch(e){ console.warn('omnidroid yönü bulunamadı', e); }
   computeSpawns();
 }
 
@@ -362,7 +385,8 @@ function createSteve(p){
   let walk = null;
   if(steveClip){ walk = mixer.clipAction(steveClip); walk.play(); walk.setEffectiveWeight(0); }
   scene.add(wrap); wrap.visible=false;
-  return { id:p.id, wrap, model, mixer, walk, w:0, lab, labName:p.name, pos:new V3(), tpos:new V3(), yaw:0, tyaw:0, speed:0, init:false };
+  const spot = makeSpot(); scene.add(spot); scene.add(spot.target);
+  return { id:p.id, wrap, model, mixer, walk, w:0, spot, lab, labName:p.name, pos:new V3(), tpos:new V3(), yaw:0, tyaw:0, speed:0, init:false };
 }
 const omniInst = { wrap:null, mixer:null, actions:{}, cur:null, label:null };
 function createOmni(){
@@ -370,8 +394,10 @@ function createOmni(){
   const model = SkeletonUtils.clone(omniTpl);
   wrap.add(model);
   omniInst.label = makeLabel('OMNİDROİD','#ff5a36'); omniInst.label.scale.set(2.8,0.7,1); omniInst.label.position.y = CFG.OMNI_H+0.8; wrap.add(omniInst.label);
+  model.traverse(o=>{ if(o.isMesh){ (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>{
+    if(m.emissive){ m.emissive.set(0xff1a0a); m.emissiveIntensity=0; m.fog=false; m.needsUpdate=true; omniMats.push(m); } }); } });
   omniInst.mixer = new THREE.AnimationMixer(model);
-  for(const k of ['idle','walk','run']) if(omniClips[k]) omniInst.actions[k] = omniInst.mixer.clipAction(omniClips[k]);
+  for(const k of ['idle','walk','roll']) if(omniClips[k]) omniInst.actions[k] = omniInst.mixer.clipAction(omniClips[k]);
   omniInst.wrap = wrap; wrap.visible=false; scene.add(wrap);
   playOmni('idle');
 }
@@ -382,10 +408,10 @@ function playOmni(name){
   if(omniInst.cur) omniInst.actions[omniInst.cur].fadeOut(0.25);
   omniInst.cur = name;
 }
-let steveFlip = 0, omniFlip = 0;
+let steveFlip = 0, omniRot = 0;
 function updateRemotes(dt){
   const ingame = G.phase!=='lobby';
-  let omniShown = false;
+  let omniShown = false, omniAt = null;
   for(const id of Object.keys(G.players)){
     if(id===myId) continue;
     const p = G.players[id];
@@ -402,6 +428,13 @@ function updateRemotes(dt){
     const isOmni = id===G.it;
     const show = ingame && p.alive;
     r.wrap.visible = show && !isOmni;
+    const lit = darkT>0.01 && show && !isOmni && p.f;
+    r.spot.intensity = lit ? CFG.FLASH_I*darkT : 0;
+    if(lit){
+      const pt=p.pt||0, cp=Math.cos(pt);
+      r.spot.position.set(r.pos.x, r.pos.y+1.45, r.pos.z);
+      r.spot.target.position.set(r.pos.x-Math.sin(r.yaw)*cp, r.pos.y+1.45+Math.sin(pt), r.pos.z-Math.cos(r.yaw)*cp);
+    }
     if(r.wrap.visible){
       r.wrap.position.copy(r.pos);
       r.wrap.rotation.y = r.yaw + CFG.STEVE_YAW + steveFlip*Math.PI;
@@ -414,16 +447,24 @@ function updateRemotes(dt){
       }
     }
     if(isOmni && show && omniInst.wrap){
-      omniShown = true;
+      omniShown = true; omniAt = r.pos;
       omniInst.wrap.position.copy(r.pos);
-      omniInst.wrap.rotation.y = r.yaw + CFG.OMNI_YAW + omniFlip*Math.PI;
-      playOmni(r.speed<0.5?'idle':(r.speed<6?'walk':'run'));
-      const a = omniInst.actions[omniInst.cur]; if(a) a.timeScale = omniInst.cur==='idle'?1:clamp(r.speed/5,0.7,1.6);
+      omniInst.wrap.rotation.y = r.yaw + omniYawOff + omniRot*Math.PI/2;
+      playOmni(r.speed<0.5?'idle':(r.speed<6.5?'walk':'roll'));
+      const a = omniInst.actions[omniInst.cur];
+      if(a) a.timeScale = omniInst.cur==='idle' ? 1 : (omniInst.cur==='roll' ? clamp(r.speed/9,0.8,1.5) : clamp(r.speed/5,0.7,1.4));
       omniInst.mixer.update(dt);
     }
   }
   if(omniInst.wrap) omniInst.wrap.visible = omniShown;
-  for(const [id,r] of remotes) if(!G.players[id]){ scene.remove(r.wrap); remotes.delete(id); }
+  // Omnidroid'in kırmızı ışığı (benim ya da uzaktaki)
+  let redOn = false;
+  if(inGame() && G.phase==='play'){
+    if(omniAt){ omniLight.position.set(omniAt.x, omniAt.y+CFG.OMNI_H+0.8, omniAt.z); redOn = true; }
+    else if(iAmOmni()){ omniLight.position.set(me.pos.x, me.pos.y+CFG.OMNI_H+0.8, me.pos.z); redOn = true; }
+  }
+  omniLight.intensity = redOn ? CFG.RED_I*darkT : 0;
+  for(const [id,r] of remotes) if(!G.players[id]){ scene.remove(r.wrap); scene.remove(r.spot); scene.remove(r.spot.target); remotes.delete(id); }
 }
 
 /* ======================= OYUN DURUMU ======================= */
@@ -486,7 +527,7 @@ function hostRecv(conn,m){
     broadcast();
   } else if(m.t==='s'){
     const p = G.players[connToId.get(conn)];
-    if(p && typeof m.x==='number'){ p.x=m.x; p.y=m.y; p.z=m.z; p.ry=m.r; }
+    if(p && typeof m.x==='number'){ p.x=m.x; p.y=m.y; p.z=m.z; p.ry=m.r; p.pt=m.pt; p.f=m.f; }
   }
 }
 function dropConn(conn){
@@ -509,7 +550,7 @@ function removePlayer(id){
 function sendAll(msg){ for(const c of conns.values()){ try{ c.send(msg); }catch{} } }
 function snapshot(){
   return { t:'st', ph:G.phase, it:G.it, tm:r2(G.time), rd:G.round, tn:G.turn, tt:G.total, rs:G.result,
-    pl:Object.values(G.players).map(p=>({i:p.id,n:p.name,x:r2(p.x),y:r2(p.y),z:r2(p.z),r:r2(p.ry),al:p.alive?1:0,sc:p.score,sp:p.sp})) };
+    pl:Object.values(G.players).map(p=>({i:p.id,n:p.name,x:r2(p.x),y:r2(p.y),z:r2(p.z),r:r2(p.ry),pt:r2(p.pt||0),f:p.f?1:0,al:p.alive?1:0,sc:p.score,sp:p.sp})) };
 }
 function broadcast(){ sendAll(snapshot()); }
 
@@ -546,7 +587,7 @@ function applyState(s){
     let p = G.players[q.i];
     if(!p) p = G.players[q.i] = { id:q.i, x:q.x, y:q.y, z:q.z, ry:q.r };
     p.name=q.n; p.alive=!!q.al; p.score=q.sc; p.sp=q.sp;
-    if(q.i!==myId){ p.x=q.x; p.y=q.y; p.z=q.z; p.ry=q.r; }
+    if(q.i!==myId){ p.x=q.x; p.y=q.y; p.z=q.z; p.ry=q.r; p.pt=q.pt; p.f=q.f; }
   }
   for(const id of Object.keys(G.players)) if(!seen.has(id)) delete G.players[id];
   if(s.rd!==prevRound && s.ph==='hide') onNewRound();
@@ -571,7 +612,7 @@ let lastTick = performance.now();
 function hostTick(){
   const now = performance.now(); const dt = Math.min(0.25,(now-lastTick)/1000); lastTick = now; G.timeAt = now;
   const me_ = G.players[myId];
-  if(me_ && inGame()){ me_.x=me.pos.x; me_.y=me.pos.y; me_.z=me.pos.z; me_.ry=me.yaw; }
+  if(me_ && inGame()){ me_.x=me.pos.x; me_.y=me.pos.y; me_.z=me.pos.z; me_.ry=me.yaw; me_.pt=me.pitch; me_.f=me.flash?1:0; }
   if(G.phase==='hide'){
     G.time -= dt;
     if(G.time<=0){ G.phase='play'; G.time=CFG.ROUND_TIME; sendAll({t:'msg',m:'Omnidroid serbest!'}); toast('Omnidroid serbest!'); }
@@ -642,13 +683,13 @@ function toLobby(msg){
 }
 
 /* ======================= OYUNCU (ben) ======================= */
-const me = { pos:new V3(), vel:new V3(), vy:0, yaw:0, pitch:0, ground:false, stamina:100 };
+const me = { pos:new V3(), vel:new V3(), vy:0, yaw:0, pitch:0, ground:false, stamina:100, rolling:false, flash:true };
 const keys = {};
 let locked = false;
 
 function teleport(s){
   me.pos.copy(s); me.vel.set(0,0,0); me.vy=0; me.ground=true;
-  me.yaw = Math.atan2(s.x, s.z);   // merkeze bak (ileri = (-sin yaw, -cos yaw))
+  me.yaw = Math.atan2(s.x, s.z);   // merkeze bak
   me.pitch = 0; me.stamina = 100;
 }
 function onNewRound(){
@@ -661,6 +702,7 @@ const frozen = ()=>G.phase==='hide' && iAmOmni();
 const isSpectator = ()=>inGame() && !iAmAlive() && (G.phase==='hide'||G.phase==='play');
 
 function updateMe(dt){
+  me.rolling = false;
   if(!inGame() || !spawns.length) return;
   const ctl = locked && !frozen();
   const f = ctl ? ((keys.KeyW||keys.ArrowUp?1:0)-(keys.KeyS||keys.ArrowDown?1:0)) : 0;
@@ -681,7 +723,8 @@ function updateMe(dt){
   const moving = f!==0 || s!==0;
   const wantSprint = ctl && keys.ShiftLeft && moving && me.stamina>0;
   const speed = omni ? (wantSprint?CFG.OMNI_RUN:CFG.OMNI_WALK) : (wantSprint?CFG.STEVE_RUN:CFG.STEVE_WALK);
-  me.stamina = clamp(me.stamina + (wantSprint?-30:16)*dt, 0, 100);
+  me.stamina = clamp(me.stamina + (wantSprint?-(omni?40:30):(omni?14:16))*dt, 0, 100);
+  me.rolling = omni && wantSprint;
 
   let wx = -sy*f + cy*s, wz = -cy*f - sy*s;
   const wl = Math.hypot(wx,wz); if(wl>0){ wx/=wl; wz/=wl; }
@@ -720,7 +763,8 @@ addEventListener('keydown', e=>{
   if(e.repeat) return;
   if(e.code==='KeyR') unstick();
   if(e.code==='KeyY'){ steveFlip^=1; toast('Steve yönü çevrildi'); }
-  if(e.code==='KeyU'){ omniFlip^=1; toast('Omnidroid yönü çevrildi'); }
+  if(e.code==='KeyU'){ omniRot=(omniRot+1)%4; toast('Omnidroid yönü 90° döndürüldü'); }
+  if(e.code==='KeyF' && inGame()){ me.flash=!me.flash; toast(me.flash?'Fener açık':'Fener kapalı'); }
 });
 addEventListener('keyup', e=>{ keys[e.code]=false; if(e.code==='Tab') hideBoard(); });
 addEventListener('blur', ()=>{ for(const k in keys) keys[k]=false; });
@@ -856,6 +900,47 @@ $('btnLeave').onclick = ()=>leave('');
 $('btnCopy').onclick = async ()=>{ try{ await navigator.clipboard.writeText(roomCode); $('btnCopy').textContent='Kopyalandı'; setTimeout(()=>$('btnCopy').textContent='Kodu kopyala',1500);}catch{} };
 addEventListener('beforeunload',()=>{ try{peer&&peer.destroy()}catch{} });
 
+/* ======================= ATMOSFER / EFEKTLER ======================= */
+const SKY = new THREE.Color(0xa9d3f5), NIGHT = new THREE.Color(0x010203), _c = new THREE.Color();
+const fxEl = $('fx');
+let darkT = 0, fxK = 0, fovCur = 75;
+function updateDark(dt){
+  const target = (inGame() && G.phase==='play') ? 1 : 0;
+  darkT += clamp(target-darkT, -dt*1.1, dt*1.1);
+  _c.copy(SKY).lerp(NIGHT, darkT);
+  scene.background.copy(_c); scene.fog.color.copy(_c);
+  const spec = isSpectator(), omni = inGame() && iAmOmni();
+  const farN = spec ? 220 : (omni ? 85 : CFG.NIGHT_FAR);
+  scene.fog.near = 90 + (2-90)*darkT;
+  scene.fog.far  = 380 + (farN-380)*darkT;
+  const amb = spec ? 0.55 : (omni ? 0.14 : 0.03);
+  hemi.intensity = 1.7 + (amb-1.7)*darkT;
+  sun.intensity = 1.5*(1-darkT);
+  const flashOn = inGame() && darkT>0.01 && iAmAlive() && !omni && me.flash;
+  localFlash.intensity = flashOn ? CFG.FLASH_I*darkT : 0;
+  for(const m of omniMats) m.emissiveIntensity = 0.55*darkT;
+}
+function updateFx(dt){
+  let k = 0;
+  if(inGame() && G.phase==='play' && !iAmOmni() && iAmAlive()){
+    const o = G.players[G.it];
+    if(o){ const d = Math.hypot(o.x-me.pos.x, o.z-me.pos.z); k = clamp(1-(d-3)/13, 0, 1); }
+  }
+  fxK += (k-fxK)*Math.min(1,dt*5);
+  const on = fxK>0.01;
+  canvas.style.filter = on ? 'grayscale('+Math.min(100,fxK*115).toFixed(0)+'%) contrast('+(1+fxK*0.25).toFixed(2)+')' : '';
+  fxEl.style.opacity = on ? String(clamp(fxK*(0.8+0.2*Math.sin(performance.now()/110)),0,1)) : '0';
+}
+function applyShake(t){
+  const a = fxK*fxK;
+  if(a>0.002){
+    camera.rotation.x += (Math.sin(t*53)+Math.sin(t*37.7+1))*0.014*a;
+    camera.rotation.y += (Math.sin(t*61+2)+Math.sin(t*29.1))*0.014*a;
+    camera.rotation.z += Math.sin(t*43+3)*0.035*a;
+    camera.position.y += Math.sin(t*71)*0.035*a;
+  }
+}
+
 /* ======================= DÖNGÜ ======================= */
 let prevUiPhase = 'lobby';
 function syncScreens(){
@@ -870,7 +955,7 @@ function syncScreens(){
 setInterval(()=>{
   if(isHost && peer){ hostTick(); }
   else if(hostConn && hostConn.open && inGame()){
-    try{ hostConn.send({t:'s', x:r2(me.pos.x), y:r2(me.pos.y), z:r2(me.pos.z), r:r2(me.yaw)}); }catch{}
+    try{ hostConn.send({t:'s', x:r2(me.pos.x), y:r2(me.pos.y), z:r2(me.pos.z), r:r2(me.yaw), pt:r2(me.pitch), f:me.flash?1:0}); }catch{}
   }
 }, 50);
 
@@ -885,16 +970,21 @@ function frame(now){
     const eye = spec ? 0 : (iAmOmni()?CFG.OMNI_EYE:CFG.STEVE_EYE);
     camera.position.set(me.pos.x, me.pos.y+eye, me.pos.z);
     camera.rotation.set(me.pitch, me.yaw, 0);
+    updateFx(dt); applyShake(now/1000);
+    fovCur += ((me.rolling?92:75)-fovCur)*Math.min(1,dt*6);
+    if(Math.abs(camera.fov-fovCur)>0.05){ camera.fov=fovCur; camera.updateProjectionMatrix(); }
     renderHud();
   } else {
     // menüde haritanın üzerinde yavaş dönen kamera
-    orbit += dt*0.05;
+    orbit += dt*0.05; updateFx(dt);
+    if(camera.fov!==75){ camera.fov=75; fovCur=75; camera.updateProjectionMatrix(); }
     const sz = mapBox.getSize(new V3()); const R = Math.max(sz.x,sz.z)*0.42;
     camera.position.set(Math.cos(orbit)*R, mapBox.min.y+Math.max(25,sz.y*0.9), Math.sin(orbit)*R);
     camera.lookAt(0, mapBox.min.y+3, 0);
     if(G.phase==='lobby'){ $('veil').classList.add('hidden'); }
     if($('lobby') && !$('lobby').classList.contains('hidden')) renderLobby();
   }
+  updateDark(dt);
   if(steveTpl) updateRemotes(dt);
   renderer.render(scene, camera);
 }
