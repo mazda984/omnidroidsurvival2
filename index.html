@@ -173,13 +173,14 @@ const CFG = {
   FLASH_I: 380,          // fener parlaklığı
   RED_I: 170,            // Omnidroid kırmızı ışığı
   NIGHT_FAR: 60,         // karanlıkta görüş mesafesi (m)
+  JUMP_MULT: 1.42,       // zıplama gücü çarpanı (yükseklik ~ çarpanın karesi: 2x)
   MAP_SIZE_MULT: 1.6     // tüm haritaların boyutu çarpanı (Omnidroid delikten geçemiyorsa artır)
 };
 const PREFIX = 'omniebe3d-';
-const BUILD = 'v5-bigmaps';   // herkes aynı dosyayı kullanmalı; sürüm uyuşmazsa oda katılımı reddedilir
+const BUILD = 'v7-jump';   // herkes aynı dosyayı kullanmalı; sürüm uyuşmazsa oda katılımı reddedilir
 // rays: [zeminden yükseklik, yarıçap]. En alt ışın, basamak yüksekliğinden (step) yukarıda olmalı.
-const STEVE_BODY = { rays: [[0.55,0.35],[1.0,0.35],[1.6,0.35]], step: 0.5, head: 1.5, jump: 7.4 };
-const OMNI_BODY  = { rays: [[1.6,0.6],[2.3,1.0],[3.0,1.1]],  step: 1.4, head: 2.3, jump: 7.4 };
+const STEVE_BODY = { rays: [[0.55,0.35],[1.0,0.35],[1.6,0.35]], step: 0.5, head: 1.5, jump: 7.4*CFG.JUMP_MULT };
+const OMNI_BODY  = { rays: [[1.6,0.6],[2.3,1.0],[3.0,1.1]],  step: 1.4, head: 2.3, jump: 7.4*CFG.JUMP_MULT };
 const GRAVITY = 22;
 
 /* ======================= YARDIMCILAR ======================= */
@@ -232,7 +233,7 @@ const MAPS = [
   { id:'b64-map',   name:'Crossroads',       fit:200, solid:false },
   { id:'b64-glass', name:'Glass Houses',     fit:120, solid:true  },
   { id:'b64-mil',   name:'Milbase',          fit:170, solid:true  },
-  { id:'b64-brain', name:'Steal a Brainrot', fit:110, solid:true  }
+  { id:'b64-brain', name:'Steal a Brainrot', fit:110, solid:true }   // istenirse haritaya özel Omnidroid zıplama çarpanı: omniJump:2
 ];
 const maps = [];
 let curMap = -1;
@@ -787,7 +788,7 @@ function updateMe(dt){
     me.pos.x = px; me.pos.z = pz; me.vel.x = 0; me.vel.z = 0;
     gy = castDown(me.pos.x, me.pos.y+body.step, me.pos.z, body.step+400);
   }
-  if(ctl && keys.Space && me.ground){ me.vy = body.jump; me.ground=false; }
+  if(ctl && keys.Space && me.ground){ me.vy = body.jump * (omni ? Math.sqrt((maps[curMap]&&maps[curMap].cfg.omniJump)||1) : 1); me.ground=false; }
   me.vy -= GRAVITY*dt;
   let ny = me.pos.y + me.vy*dt;
   const was = me.ground;
